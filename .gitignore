@@ -1,0 +1,13 @@
+# Entorno virtual
+venv/
+__pycache__/
+*.pyc
+
+# Sistema
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Archivos de configuración local
+config_local.py

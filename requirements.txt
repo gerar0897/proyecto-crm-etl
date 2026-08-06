@@ -1,0 +1,7 @@
+numpy==2.5.1
+pandas==3.0.5
+PyMySQL==1.2.0
+python-dateutil==2.9.0.post0
+six==1.17.0
+SQLAlchemy==2.0.51
+typing_extensions==4.16.0
