@@ -1,0 +1,26 @@
+services:
+  mysql:
+    image: mysql:8.0
+    platform: linux/amd64
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=root123
+      - MYSQL_DATABASE=suitecrm
+      - MYSQL_USER=suitecrm
+      - MYSQL_PASSWORD=suitecrm123
+    volumes:
+      - crm_data:/var/lib/mysql
+
+  metabase:
+    image: metabase/metabase:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - MB_DB_TYPE=h2
+    volumes:
+      - metabase_data:/metabase-data
+
+volumes:
+  crm_data:
+  metabase_data:

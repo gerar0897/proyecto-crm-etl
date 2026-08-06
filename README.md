@@ -34,16 +34,43 @@ proyecto-crm-etl/
 - Docker con MySQL 8 corriendo (base `suitecrm` con datos de prueba)
 - DBeaver (opcional, para explorar el DW visualmente)
 
-## Setup
+## Setup completo (primera vez)
 
 ### 1. Clonar el repositorio
 
 ```bash
-git clone <url-del-repo>
+git clone https://github.com/gerar0897/proyecto-crm-etl.git
 cd proyecto-crm-etl
 ```
 
-### 2. Crear entorno virtual e instalar dependencias
+### 2. Levantar los servicios Docker (MySQL + Metabase)
+
+```bash
+docker-compose up -d
+```
+
+Esto arranca:
+- MySQL 8 en `localhost:3306` (usuario `root`, password `root123`)
+- Metabase en `localhost:3000`
+
+### 3. Importar los datos de SuiteCRM
+
+Con el contenedor MySQL corriendo, importar el dump con los datos de prueba:
+
+```bash
+# Primero crear la base
+docker exec -i proyecto-crm-mysql-1 mysql -uroot -proot123 -e "CREATE DATABASE IF NOT EXISTS suitecrm;"
+
+# Luego importar el dump
+docker exec -i proyecto-crm-mysql-1 mysql -uroot -proot123 suitecrm < suitecrm_dump.sql
+```
+
+En Windows, el nombre del contenedor puede variar. Verificar con:
+```bash
+docker ps
+```
+
+### 4. Crear entorno virtual Python e instalar dependencias
 
 ```bash
 python3 -m venv venv
@@ -52,45 +79,20 @@ venv\Scripts\activate         # Windows
 pip install -r requirements.txt
 ```
 
-### 3. Ejecutar scripts SQL en DBeaver
+### 5. Crear el Data Warehouse
 
-Conectado al MySQL de Docker, ejecutar en orden:
+Conectarse al MySQL con DBeaver (u otro cliente) y ejecutar en orden:
 
 1. `CreacionDW.sql` — crea la base `dw_crm_2026` y todas las tablas.
 2. `LlenarDimTiempo.sql` — llena `dim_tiempo` con el rango 2023-2027.
 
-### 4. Ejecutar los scripts Python
+### 6. Ejecutar los scripts Python de carga
 
 ```bash
 python3 carga_inicial.py    # Carga las 6 dimensiones desde SuiteCRM
 python3 carga_facts.py      # Carga fact_opportunities y fact_actividades
 ```
 
-## Modelo dimensional
+### 7. Verificar en DBeaver
 
-### Fact tables
-
-- **`fact_opportunities`** — grano: una oportunidad de venta.
-  Métricas: monto, probabilidad, ciclo_venta_dias, ganada.
-- **`fact_actividades`** — grano: una actividad (call o meeting).
-  Métricas: duracion_horas, contador_actividad.
-
-### Dimensiones
-
-- `dim_tiempo` (generada)
-- `dim_vendedor`, `dim_cuenta`, `dim_lead`, `dim_contacto` (desde SuiteCRM)
-- `dim_sales_stage`, `dim_tipo_actividad` (catálogos definidos en el ETL)
-
-### Dimensiones conformadas
-
-`dim_vendedor` y `dim_tiempo` son compartidas por ambas fact tables,
-permitiendo análisis cruzados de oportunidades vs actividades.
-
-## Estado actual del proyecto
-
-- [x] Modelo dimensional diseñado y creado
-- [x] Dimensión de tiempo generada (2023-2027)
-- [x] Carga inicial de dimensiones desde SuiteCRM
-- [x] Carga inicial de fact tables con lookups a dimensiones
-- [ ] Carga incremental (SCD Tipo 1 y 2)
-- [ ] Dashboards en Metabase
+Con las 8 dimensiones y 2 fact tables cargadas, el DW está listo para consultas analíticas.
