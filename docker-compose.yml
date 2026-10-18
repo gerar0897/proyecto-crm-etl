@@ -1,26 +1,44 @@
+# Entorno local de desarrollo (no usar estas credenciales fuera de este entorno).
+#
+#  - mysql    : un solo servidor MySQL 8.0 con tres bases independientes:
+#                 suitecrm     -> pertenece a SuiteCRM (la crea y administra la aplicación)
+#                 crm_fuente   -> datos sintéticos del proyecto (origen del ETL)
+#                 dw_crm_2026  -> Data Warehouse dimensional (destino del ETL)
+#  - suitecrm : aplicación SuiteCRM 8 (http://localhost:8080). Sistema fuente de referencia.
+#
+# IMPORTANTE: suitecrm_dump.sql NO debe cargarse en la base "suitecrm": reemplazaría
+# tablas propias de SuiteCRM (users, accounts, leads...) y la aplicación dejaría de abrir.
 services:
+
   mysql:
     image: mysql:8.0
     platform: linux/amd64
+    container_name: suitecrm-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: suitecrm
+      MYSQL_USER: suitecrm
+      MYSQL_PASSWORD: suitecrm123
     ports:
       - "3306:3306"
-    environment:
-      - MYSQL_ROOT_PASSWORD=root123
-      - MYSQL_DATABASE=suitecrm
-      - MYSQL_USER=suitecrm
-      - MYSQL_PASSWORD=suitecrm123
     volumes:
       - crm_data:/var/lib/mysql
 
-  metabase:
-    image: metabase/metabase:latest
+  suitecrm:
+    image: bitnamilegacy/suitecrm:8.8.1-debian-12-r3
+    container_name: suitecrm
+    restart: always
+    depends_on:
+      - mysql
     ports:
-      - "3000:3000"
+      - "8080:8080"
     environment:
-      - MB_DB_TYPE=h2
-    volumes:
-      - metabase_data:/metabase-data
+      SUITECRM_DATABASE_HOST: mysql
+      SUITECRM_DATABASE_PORT_NUMBER: 3306
+      SUITECRM_DATABASE_NAME: suitecrm
+      SUITECRM_DATABASE_USER: suitecrm
+      SUITECRM_DATABASE_PASSWORD: suitecrm123
 
 volumes:
   crm_data:
-  metabase_data:

@@ -1,41 +1,37 @@
-
 """
-Script de Carga Inicial del Data Warehouse
+Script de Carga Inicial del Data Warehouse (dimensiones)
 Proyecto: Inteligencia Comercial y CRM
-Origen: SuiteCRM (MySQL)
+Origen: crm_fuente (MySQL, datos sintéticos con estructura simplificada de SuiteCRM)
 Destino: dw_crm_2026 (MySQL)
 
-Este script realiza la extracción, transformación y carga inicial
-de las dimensiones del modelo Kimball desde SuiteCRM al DW.
+Este script realiza la extracción, transformación y carga de las dimensiones
+del modelo Kimball desde la base fuente (crm_fuente) al DW.
+
+Orden de ejecución del proyecto:
+    1) LlenarDimTiempo.sql   (una sola vez)
+    2) carga_inicial.py      (este script: dimensiones)
+    3) carga_facts.py        (hechos)
+
+Diseño de la carga (repetible):
+    - Primero se EXTRAE y TRANSFORMA todo en memoria. Si la fuente falla,
+      el DW no se toca.
+    - Solo después se vacían las tablas del DW y se insertan las dimensiones.
 """
 
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from datetime import datetime
 
-# =====================================================================
-# CONFIGURACIÓN DE CONEXIONES
-# =====================================================================
-
-# Origen: SuiteCRM
-ENGINE_ORIGEN = create_engine(
-    "mysql+pymysql://root:root123@localhost:3306/suitecrm"
-)
-
-# Destino: Data Warehouse
-ENGINE_DW = create_engine(
-    "mysql+pymysql://root:root123@localhost:3306/dw_crm_2026"
-)
+# Conexiones: ver config.py (variables de entorno DB_*; por defecto, el docker-compose local)
+from config import ENGINE_ORIGEN, ENGINE_DW
 
 
 # =====================================================================
-# FUNCIONES DE CARGA POR DIMENSIÓN
+# EXTRACCIÓN + TRANSFORMACIÓN POR DIMENSIÓN (devuelven un DataFrame)
 # =====================================================================
 
-def cargar_dim_vendedor():
-    """Carga dim_vendedor desde suitecrm.users"""
-    print("→ Cargando dim_vendedor...")
-
+def preparar_dim_vendedor():
+    """dim_vendedor desde crm_fuente.users"""
     query = """
         SELECT
             id           AS vendedor_nk,
@@ -52,16 +48,11 @@ def cargar_dim_vendedor():
     df["nombre_completo"] = (
         df["nombre"].fillna("") + " " + df["apellido"].fillna("")
     ).str.strip()
-
-    # Carga al DW
-    df.to_sql("dim_vendedor", ENGINE_DW, if_exists="append", index=False)
-    print(f"  ✓ dim_vendedor: {len(df)} filas cargadas")
+    return df
 
 
-def cargar_dim_cuenta():
-    """Carga dim_cuenta desde suitecrm.accounts"""
-    print("→ Cargando dim_cuenta...")
-
+def preparar_dim_cuenta():
+    """dim_cuenta desde crm_fuente.accounts"""
     query = """
         SELECT
             id               AS cuenta_nk,
@@ -77,15 +68,11 @@ def cargar_dim_cuenta():
     df["ingresos_anuales"] = pd.to_numeric(
         df["ingresos_anuales"], errors="coerce"
     ).fillna(0)
-
-    df.to_sql("dim_cuenta", ENGINE_DW, if_exists="append", index=False)
-    print(f"  ✓ dim_cuenta: {len(df)} filas cargadas")
+    return df
 
 
-def cargar_dim_lead():
-    """Carga dim_lead desde suitecrm.leads"""
-    print("→ Cargando dim_lead...")
-
+def preparar_dim_lead():
+    """dim_lead desde crm_fuente.leads"""
     query = """
         SELECT
             id           AS lead_nk,
@@ -96,17 +83,14 @@ def cargar_dim_lead():
     """
     df = pd.read_sql(query, ENGINE_ORIGEN)
 
-    # Transformación: convertido a booleano
+    # Transformación: convertido a booleano (regla RN-05: se usa el campo
+    # converted, no el texto de status; ver README sobre la inconsistencia)
     df["convertido"] = df["convertido"].fillna(0).astype(bool)
-
-    df.to_sql("dim_lead", ENGINE_DW, if_exists="append", index=False)
-    print(f"  ✓ dim_lead: {len(df)} filas cargadas")
+    return df
 
 
-def cargar_dim_contacto():
-    """Carga dim_contacto desde suitecrm.contacts"""
-    print("→ Cargando dim_contacto...")
-
+def preparar_dim_contacto():
+    """dim_contacto desde crm_fuente.contacts"""
     query = """
         SELECT
             id           AS contacto_nk,
@@ -122,19 +106,15 @@ def cargar_dim_contacto():
     df["nombre_completo"] = (
         df["nombre"].fillna("") + " " + df["apellido"].fillna("")
     ).str.strip()
-
-    df.to_sql("dim_contacto", ENGINE_DW, if_exists="append", index=False)
-    print(f"  ✓ dim_contacto: {len(df)} filas cargadas")
+    return df
 
 
-def cargar_dim_sales_stage():
+def preparar_dim_sales_stage():
     """
-    Carga dim_sales_stage con valores catálogo estándar de SuiteCRM.
-    A diferencia de las demás, esta se llena con INSERTs directos
+    dim_sales_stage con valores catálogo estándar del CRM.
+    A diferencia de las demás, se define aquí (no se lee de la fuente)
     porque es una dimensión pequeña de tipo catálogo.
     """
-    print("→ Cargando dim_sales_stage...")
-
     etapas = [
         # (nk, descripcion, orden, es_cerrada, es_ganada)
         ("Prospecting",         "Prospección inicial",         1, False, False),
@@ -148,28 +128,52 @@ def cargar_dim_sales_stage():
         ("Closed Won",          "Cerrada Ganada",              9, True,  True),
         ("Closed Lost",         "Cerrada Perdida",            10, True,  False),
     ]
-
-    df = pd.DataFrame(etapas, columns=[
+    return pd.DataFrame(etapas, columns=[
         "sales_stage_nk", "descripcion", "orden_pipeline",
         "es_cerrada", "es_ganada"
     ])
 
-    df.to_sql("dim_sales_stage", ENGINE_DW, if_exists="append", index=False)
-    print(f"  ✓ dim_sales_stage: {len(df)} filas cargadas")
 
-
-def cargar_dim_tipo_actividad():
-    """Carga dim_tipo_actividad con valores catálogo (Call, Meeting)"""
-    print("→ Cargando dim_tipo_actividad...")
-
+def preparar_dim_tipo_actividad():
+    """dim_tipo_actividad con valores catálogo (Call, Meeting)"""
     tipos = [
         ("Call",    "Llamada telefónica al cliente"),
         ("Meeting", "Reunión con el cliente"),
     ]
+    return pd.DataFrame(tipos, columns=["tipo_actividad_nk", "descripcion"])
 
-    df = pd.DataFrame(tipos, columns=["tipo_actividad_nk", "descripcion"])
-    df.to_sql("dim_tipo_actividad", ENGINE_DW, if_exists="append", index=False)
-    print(f"  ✓ dim_tipo_actividad: {len(df)} filas cargadas")
+
+# =====================================================================
+# REINICIO (carga repetible / idempotente)
+# =====================================================================
+
+# Tablas que se recargan completas. dim_tiempo NO se toca: la genera
+# LlenarDimTiempo.sql y no depende del CRM.
+TABLAS_A_REINICIAR = [
+    "fact_actividades", "fact_opportunities",      # hechos primero
+    "dim_vendedor", "dim_cuenta", "dim_lead", "dim_contacto",
+    "dim_sales_stage", "dim_tipo_actividad",
+]
+
+
+def reiniciar_dw():
+    """
+    Vacía dimensiones y hechos (excepto dim_tiempo) para que una segunda
+    ejecución produzca el mismo resultado que la primera, en lugar de
+    duplicar filas con surrogate keys nuevas. TRUNCATE además reinicia el
+    AUTO_INCREMENT, así que las SKs vuelven a ser 1, 2, 3...
+
+    Como las dimensiones cambian de SK, los hechos quedarían apuntando a
+    llaves obsoletas: por eso también se vacían. Después de este script
+    hay que volver a ejecutar carga_facts.py.
+    """
+    print("→ Reiniciando dimensiones y hechos (dim_tiempo se conserva)...")
+    with ENGINE_DW.begin() as conn:
+        conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+        for tabla in TABLAS_A_REINICIAR:
+            conn.execute(text(f"TRUNCATE TABLE {tabla}"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+    print("  ✓ Tablas vaciadas. Recuerda ejecutar carga_facts.py al terminar.")
 
 
 # =====================================================================
@@ -178,9 +182,8 @@ def cargar_dim_tipo_actividad():
 
 def ejecutar_carga_inicial():
     """
-    Orquesta la carga inicial de todas las dimensiones en el orden
-    correcto. Las dimensiones no tienen dependencias entre sí, pero
-    deben cargarse antes que las fact tables.
+    Orquesta la carga de todas las dimensiones. Las dimensiones no tienen
+    dependencias entre sí, pero deben cargarse antes que las fact tables.
     """
     inicio = datetime.now()
     print("=" * 60)
@@ -189,14 +192,24 @@ def ejecutar_carga_inicial():
     print("=" * 60)
 
     # Nota: dim_tiempo se carga por separado con script SQL
-    # (LlenarDimTiempo ejecutado previamente)
+    # (LlenarDimTiempo.sql ejecutado previamente)
 
-    cargar_dim_vendedor()
-    cargar_dim_cuenta()
-    cargar_dim_lead()
-    cargar_dim_contacto()
-    cargar_dim_sales_stage()
-    cargar_dim_tipo_actividad()
+    # 1) EXTRAER + TRANSFORMAR todo antes de tocar el DW
+    print("→ Extrayendo y transformando desde la fuente...")
+    dimensiones = {
+        "dim_vendedor":       preparar_dim_vendedor(),
+        "dim_cuenta":         preparar_dim_cuenta(),
+        "dim_lead":           preparar_dim_lead(),
+        "dim_contacto":       preparar_dim_contacto(),
+        "dim_sales_stage":    preparar_dim_sales_stage(),
+        "dim_tipo_actividad": preparar_dim_tipo_actividad(),
+    }
+
+    # 2) CARGAR: vaciar e insertar
+    reiniciar_dw()
+    for nombre, df in dimensiones.items():
+        df.to_sql(nombre, ENGINE_DW, if_exists="append", index=False)
+        print(f"  ✓ {nombre}: {len(df)} filas cargadas")
 
     fin = datetime.now()
     duracion = (fin - inicio).total_seconds()
