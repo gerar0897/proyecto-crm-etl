@@ -199,13 +199,13 @@ Los comandos usan `docker cp` y `docker exec`, así funcionan igual en PowerShel
 # Base fuente (datos sintéticos)  ->  NO usar la base "suitecrm"
 docker exec suitecrm-mysql mysql -uroot -proot123 -e "CREATE DATABASE IF NOT EXISTS crm_fuente CHARACTER SET utf8mb4;"
 docker cp suitecrm_dump.sql suitecrm-mysql:/tmp/suitecrm_dump.sql
-docker exec suitecrm-mysql sh -c "mysql -uroot -proot123 crm_fuente < /tmp/suitecrm_dump.sql"
+docker exec suitecrm-mysql sh -c "mysql -uroot -proot123 --default-character-set=utf8mb4 crm_fuente < /tmp/suitecrm_dump.sql"
 
 # Data Warehouse: estructura y dimensión de tiempo (una sola vez)
 docker cp CreacionDW.sql suitecrm-mysql:/tmp/CreacionDW.sql
-docker exec suitecrm-mysql sh -c "mysql -uroot -proot123 < /tmp/CreacionDW.sql"
+docker exec suitecrm-mysql sh -c "mysql -uroot -proot123 --default-character-set=utf8mb4 < /tmp/CreacionDW.sql"
 docker cp LlenarDimTiempo.sql suitecrm-mysql:/tmp/LlenarDimTiempo.sql
-docker exec suitecrm-mysql sh -c "mysql -uroot -proot123 < /tmp/LlenarDimTiempo.sql"
+docker exec suitecrm-mysql sh -c "mysql -uroot -proot123 --default-character-set=utf8mb4 < /tmp/LlenarDimTiempo.sql"
 ```
 
 También puede ejecutarse cada `.sql` desde DBeaver (conexión a `localhost:3306`, usuario `root`) con *Ejecutar script* (Alt+X). `LlenarDimTiempo.sql` debe correr una sola vez: repetirlo da error de llave duplicada.
