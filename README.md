@@ -1,6 +1,6 @@
 # Proyecto CRM ETL — Inteligencia Comercial y CRM
 
-Data Warehouse dimensional (esquema estrella, metodología Kimball) para analizar el proceso comercial de un CRM: oportunidades de venta y actividades comerciales (llamadas y reuniones).
+Data Warehouse dimensional (esquema estrella, metodología Kimball) para analizar el proceso comercial de un CRM: oportunidades de venta, actividades comerciales (llamadas y reuniones) y captación de leads.
 Especialización en Ingeniería de Datos — Universidad de El Salvador, 2026.
 
 **Equipo:** Gerardo Figueroa · Roberto Ángel Aragón · Edwin Barrera
@@ -65,6 +65,7 @@ La solución corre **íntegramente en local** (Docker Desktop, Python y Power BI
 |---|---|---|
 | `fact_opportunities` | Una oportunidad de venta | Transaction fact |
 | `fact_actividades` | Una actividad comercial (una llamada o una reunión) | Transaction fact |
+| `fact_leads` | Un lead (prospecto) | Transaction fact |
 
 ### 3.2 Diagrama
 
@@ -79,6 +80,9 @@ erDiagram
     dim_tipo_actividad ||--o{ fact_actividades : "tipo"
     dim_tiempo ||--o{ fact_actividades : "fecha_actividad_sk"
     fact_opportunities ||--o{ fact_actividades : "oportunidad_dd (clave degenerada)"
+    dim_lead ||--|| fact_leads : "lead_sk"
+    dim_vendedor ||--o{ fact_leads : "responsable del lead"
+    dim_tiempo ||--o{ fact_leads : "fecha_entrada_sk"
 
     fact_opportunities {
         int vendedor_sk FK
@@ -103,25 +107,35 @@ erDiagram
         decimal duracion_horas
         int contador_actividad
     }
+    fact_leads {
+        int lead_sk FK
+        int vendedor_sk FK
+        int fecha_entrada_sk FK
+        int contador_lead
+    }
 ```
 
-`dim_lead` y `dim_contacto` se cargan pero **ninguna fact table las referencia**: la fuente no relaciona llamadas ni reuniones con contactos o leads, ni leads con oportunidades. Quedan disponibles para análisis directo (por ejemplo, conversión de leads por fuente).
+`dim_lead` se relaciona con `fact_leads` (una fila por lead), que aporta el vendedor responsable del lead y su fecha de entrada. Con eso la conversión de leads puede cortarse por vendedor, por fuente y por periodo. `dim_contacto` se carga pero **ninguna fact table la referencia**.
+
+La fuente **no relaciona** llamadas ni reuniones con contactos o leads, ni leads con oportunidades (la tabla `leads` no trae `opportunity_id`). Por eso `fact_leads` no tiene `oportunidad_dd` y no es posible saber qué lead originó qué oportunidad.
 
 ### 3.3 Matriz de bus
 
-| Hecho | vendedor | tiempo | cuenta | sales_stage | tipo_actividad |
-|---|:-:|:-:|:-:|:-:|:-:|
-| `fact_opportunities` | ✓ (responsable) | ✓ (×2: creación y cierre) | ✓ | ✓ | |
-| `fact_actividades` | ✓ (ejecutor) | ✓ | | | ✓ |
+| Hecho | vendedor | tiempo | cuenta | sales_stage | tipo_actividad | lead |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| `fact_opportunities` | ✓ (responsable) | ✓ (×2: creación y cierre) | ✓ | ✓ | | |
+| `fact_actividades` | ✓ (ejecutor) | ✓ | | | ✓ | |
+| `fact_leads` | ✓ (responsable del lead) | ✓ (fecha de entrada) | | | | ✓ |
 
 ### 3.4 Tipos de dimensiones implementadas
 
 | Dimensión | Tipo | Detalle |
 |---|---|---|
-| `dim_tiempo` | Calendario, **conformada**, **role-playing** | Un día por fila, 2023-01-01 a 2027-12-31 (1,826 filas). Clave `tiempo_sk` con formato `YYYYMMDD`, excepción admitida por Kimball para la dimensión de fecha. Se usa dos veces en `fact_opportunities` (creación y cierre) |
-| `dim_vendedor` | **Conformada** | Compartida por ambas facts, con rol distinto: responsable de la oportunidad vs. ejecutor de la actividad |
+| `dim_tiempo` | Calendario, **conformada**, **role-playing** | Un día por fila, 2023-01-01 a 2027-12-31 (1,826 filas). Clave `tiempo_sk` con formato `YYYYMMDD`, excepción admitida por Kimball para la dimensión de fecha. Se usa dos veces en `fact_opportunities` (creación y cierre) y una vez en `fact_leads` (fecha de entrada) |
+| `dim_vendedor` | **Conformada** | Compartida por las tres facts, con rol distinto: responsable de la oportunidad, ejecutor de la actividad y responsable del lead |
 | `dim_cuenta` | Descriptiva estándar | Origen: `accounts` |
-| `dim_lead`, `dim_contacto` | Descriptivas sin hecho asociado | Ver 3.2 |
+| `dim_lead` | Descriptiva | Atributos del lead (fuente, estado, convertido). Se relaciona 1:1 con `fact_leads` |
+| `dim_contacto` | Descriptiva sin hecho asociado | Ver 3.2 |
 | `dim_sales_stage` | Catálogo / referencia | 10 etapas con `orden_pipeline`, `es_cerrada`, `es_ganada`. Definida en el ETL |
 | `dim_tipo_actividad` | Catálogo / referencia | Call, Meeting. Definida en el ETL |
 | `oportunidad_dd`, `actividad_dd` | **Dimensiones degeneradas** | UUID del origen guardado en la fact table, sin tabla propia, para trazabilidad. `oportunidad_dd` en `fact_actividades` enlaza ambas facts |
@@ -131,6 +145,8 @@ erDiagram
 **Historial (SCD).** No se implementa. Cada ejecución del ETL recarga las dimensiones completas (equivale a SCD Tipo 1). La estructura con surrogate keys deja preparado un SCD Tipo 2.
 
 **Decisión de diseño debatible.** `fuente` y `estado` son atributos descriptivos de baja cardinalidad que viven en la fact table. La alternativa más estricta en Kimball es una dimensión pequeña por cada uno; se mantuvieron en la fact para no agregar tablas sin valor analítico adicional.
+
+**Decisión de diseño debatible (leads).** `dim_lead` y `fact_leads` tienen el mismo número de filas porque el grano es un lead. Kimball permitiría llevar fuente, estado y convertido directamente a `fact_leads` como dimensiones degeneradas y prescindir de `dim_lead`. Se mantuvo `dim_lead` para no alterar lo que ya funcionaba y para filtrar por esos atributos desde la dimensión; el costo es que los atributos del lead y el evento viven en tablas distintas.
 
 ## 4. Reglas de negocio
 
@@ -146,6 +162,7 @@ erDiagram
 | RN-08 | Un monto o probabilidad nulos se cargan como 0 | `carga_facts.py` |
 | RN-09 | Las filas de hechos con llave de dimensión sin correspondencia se **descartan y se reportan** en consola | `carga_facts.py` |
 | RN-10 | La carga es **completa y repetible**: primero se extrae y transforma todo en memoria; solo después se vacían las tablas del DW y se insertan los datos. Si la fuente falla, el DW no se modifica | `carga_inicial.py`, `carga_facts.py` |
+| RN-11 | El `vendedor` de `fact_leads` es el responsable del lead (`assigned_user_id`) y la fecha es la de entrada (`date_entered`). Puede ser distinto del responsable de la oportunidad. La conversión se agrupa por fecha de entrada porque la fuente no guarda la fecha de conversión | `carga_facts.py` → `fact_leads` |
 
 ## 5. Calidad de datos (profiling de la fuente)
 
@@ -156,6 +173,7 @@ erDiagram
 | Llaves huérfanas | 0 (oportunidades→cuenta y vendedor; llamadas y reuniones→oportunidad y vendedor) |
 | Fechas | Oportunidades creadas entre 2025-05-29 y 2026-05-23; cierre entre 2025-06-23 y 2026-09-10; `close_date < date_entered`: 0 casos |
 | Inconsistencia | **18 leads** con `status = 'Converted'` y `converted = 0`. Con `converted = 1` (RN-05) la conversión es 53/120 = 44.2 %; con `status` sería 71/120 = 59.2 % |
+| Leads | 120 leads, todos con `assigned_user_id` válido (8 vendedores) y `date_entered` entre 2025-05-29 y 2026-05-23; ninguno se descarta al cargar `fact_leads` |
 | Probabilidad | Coincide con la estándar de la etapa en el 100 % de las oportunidades |
 | Atributos constantes | `users.title`, `users.department` y `accounts.billing_country` tienen un solo valor |
 | Texto | Algunos nombres de usuario tienen errores en la fuente (por ejemplo "Jos") y se cargan tal cual |
@@ -167,7 +185,7 @@ Las consultas de referencia están en [`consultas_kpi.sql`](consultas_kpi.sql).
 | KPI | Fórmula | Aditividad | Resultado actual |
 |---|---|---|---|
 | Win Rate por vendedor | ganadas ÷ **base declarada** (cerradas o total) | Ratio: no se suma, se recalcula | 58.1 % sobre cerradas (18/31) · 12.0 % sobre el total (18/150) |
-| Lead-to-Opportunity rate | leads convertidos ÷ total de leads (`dim_lead`) | Ratio | 44.2 % (53/120) |
+| Lead-to-Opportunity rate | leads convertidos ÷ total de leads (`fact_leads` + `dim_lead`). Se puede cortar por vendedor, fuente y fecha de entrada | Ratio | 44.2 % (53/120) |
 | Ciclo de venta promedio | `AVG(ciclo_venta_dias)`, solo cerradas | No aditiva: se promedia | 53.0 días (31 cerradas) |
 | Forecast vs real | `SUM(monto × probabilidad/100)` de abiertas vs `SUM(monto)` de ganadas | Aditiva (monto) | 5,928,620 vs 2,036,823 |
 | Actividades por oportunidad | actividades ÷ oportunidades, unidas por `oportunidad_dd` | El conteo es aditivo; el ratio no | 2.33 (350/150) |
@@ -210,6 +228,8 @@ docker exec suitecrm-mysql sh -c "mysql -uroot -proot123 --default-character-set
 
 También puede ejecutarse cada `.sql` desde DBeaver (conexión a `localhost:3306`, usuario `root`) con *Ejecutar script* (Alt+X). `LlenarDimTiempo.sql` debe correr una sola vez: repetirlo da error de llave duplicada.
 
+Si el DW ya estaba creado antes de agregar `fact_leads`, no hace falta rehacerlo: basta con ejecutar el bloque `CREATE TABLE fact_leads` de `CreacionDW.sql` y volver a correr `carga_facts.py`.
+
 Para rehacer el DW desde cero: `docker exec suitecrm-mysql mysql -uroot -proot123 -e "DROP DATABASE dw_crm_2026;"` y repetir `CreacionDW.sql` y `LlenarDimTiempo.sql`.
 
 ### 7.3 Ejecutar el ETL
@@ -220,16 +240,16 @@ venv\Scripts\activate          # Windows (en macOS/Linux: source venv/bin/activa
 pip install -r requirements.txt
 
 python carga_inicial.py        # dimensiones (vacía y recarga; también vacía los hechos)
-python carga_facts.py          # hechos
+python carga_facts.py          # hechos (oportunidades, actividades y leads)
 ```
 
 Es **repetible**: puede ejecutarse varias veces y deja siempre el mismo resultado. Siempre en este orden (dimensiones y después hechos).
 
-**Resultado esperado:** `dim_vendedor` 8 · `dim_cuenta` 50 · `dim_lead` 120 · `dim_contacto` 80 · `dim_sales_stage` 10 · `dim_tipo_actividad` 2 · `dim_tiempo` 1,826 · `fact_opportunities` 150 · `fact_actividades` 350.
+**Resultado esperado:** `dim_vendedor` 8 · `dim_cuenta` 50 · `dim_lead` 120 · `dim_contacto` 80 · `dim_sales_stage` 10 · `dim_tipo_actividad` 2 · `dim_tiempo` 1,826 · `fact_opportunities` 150 · `fact_actividades` 350 · `fact_leads` 120.
 
 ### 7.4 Validar
 
-Ejecutar [`consultas_kpi.sql`](consultas_kpi.sql) en DBeaver. Las tres primeras consultas (V1–V3) validan conteos e integridad; el resto calcula los KPIs.
+Ejecutar [`consultas_kpi.sql`](consultas_kpi.sql) en DBeaver. Las cuatro primeras consultas (V1–V4) validan conteos e integridad; el resto calcula los KPIs.
 
 ### 7.5 Configuración de conexiones
 
@@ -243,9 +263,10 @@ Power BI Desktop solo está disponible para **Windows**.
 
 1. Instalar **MySQL Connector/NET** (Oracle, descarga en dev.mysql.com). Sin él, Power BI no puede conectarse a MySQL.
 2. *Obtener datos → Base de datos MySQL*. Servidor `localhost:3306`, base de datos **`dw_crm_2026`**.
-3. Cargar las 9 tablas del DW. Conectar **siempre al DW**, no a `crm_fuente`.
+3. Cargar las 10 tablas del DW (7 dimensiones y 3 hechos). Conectar **siempre al DW**, no a `crm_fuente`.
 4. `dim_tiempo` tiene dos relaciones con `fact_opportunities` (fecha de creación y de cierre): solo una puede estar activa y la otra se usa en las medidas con `USERELATIONSHIP` de DAX.
-5. Power BI antepone el nombre de la base a cada tabla al cargarla (por ejemplo `dw_crm_2026 fact_opportunities`). **Renombrar las tablas** quitando ese prefijo (`fact_opportunities`, `dim_vendedor`...); de lo contrario las fórmulas DAX fallan con "Failed to resolve name".
+5. `fact_leads` se relaciona con `dim_lead` (`lead_sk`), `dim_vendedor` (`vendedor_sk`) y `dim_tiempo` (`fecha_entrada_sk`): las tres son uno a varios, con filtro en una sola dirección y activas. Con esto la conversión de leads responde a los segmentadores de vendedor y de periodo.
+6. Power BI antepone el nombre de la base a cada tabla al cargarla (por ejemplo `dw_crm_2026 fact_opportunities`). **Renombrar las tablas** quitando ese prefijo (`fact_opportunities`, `dim_vendedor`...); de lo contrario las fórmulas DAX fallan con "Failed to resolve name".
 
 **Tablero: [PENDIENTE].** Preguntas de negocio que debe responder cada visual:
 
@@ -264,11 +285,11 @@ Los valores de `consultas_kpi.sql` sirven para comprobar que las medidas del tab
 proyecto-crm-etl/
 ├── docker-compose.yml     # MySQL 8.0 + SuiteCRM 8
 ├── suitecrm_dump.sql      # Datos sintéticos de origen (se cargan en crm_fuente)
-├── CreacionDW.sql         # DDL del modelo dimensional
+├── CreacionDW.sql         # DDL del modelo dimensional (incluye fact_leads)
 ├── LlenarDimTiempo.sql    # Procedimiento que genera dim_tiempo (2023-2027)
 ├── config.py              # Conexiones (variables de entorno DB_*)
 ├── carga_inicial.py       # ETL de las 6 dimensiones
-├── carga_facts.py         # ETL de fact_opportunities y fact_actividades
+├── carga_facts.py         # ETL de fact_opportunities, fact_actividades y fact_leads
 ├── consultas_kpi.sql      # Validaciones y KPIs
 ├── requirements.txt
 ├── .gitignore
@@ -289,5 +310,6 @@ proyecto-crm-etl/
 
 - La fuente es sintética y limpia; el profiling no reproduce los problemas de calidad de un CRM real.
 - No hay carga incremental ni historial de cambios (SCD). La tabla `parametros` queda reservada para una carga incremental futura y hoy no se usa.
-- `dim_lead` y `dim_contacto` no están conectadas a ninguna tabla de hechos (ver 3.2). Una tabla `fact_leads` permitiría analizar la conversión por vendedor y por mes.
+- `dim_contacto` no está conectada a ninguna tabla de hechos (ver 3.2).
+- `fact_leads` permite analizar la conversión por vendedor, fuente y periodo, pero la fuente no relaciona leads con oportunidades: no se puede saber qué lead originó qué oportunidad. Hacerlo requeriría un campo `opportunity_id` en la tabla `leads` del origen.
 - SuiteCRM está levantado como sistema de referencia, pero los datos del ETL vienen de la base sintética `crm_fuente`.

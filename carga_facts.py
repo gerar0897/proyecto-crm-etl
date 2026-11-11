@@ -4,7 +4,8 @@ Proyecto: Inteligencia Comercial y CRM
 Origen: crm_fuente (MySQL, datos sintéticos con estructura simplificada de SuiteCRM)
 Destino: dw_crm_2026 (MySQL)
 
-Este script carga las tablas de hechos aplicando lookups a las
+Este script carga las tablas de hechos (fact_opportunities, fact_actividades
+y fact_leads) aplicando lookups a las
 dimensiones ya pobladas, para reemplazar las llaves naturales
 (UUIDs del CRM) por surrogate keys del DW.
 """
@@ -95,6 +96,7 @@ def vaciar_hechos():
         conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
         conn.execute(text("TRUNCATE TABLE fact_actividades"))
         conn.execute(text("TRUNCATE TABLE fact_opportunities"))
+        conn.execute(text("TRUNCATE TABLE fact_leads"))
         conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
 
 
@@ -239,6 +241,48 @@ def preparar_fact_actividades(lookups, oportunidades_validas):
     return df_valido[columnas_fact]
 
 
+def preparar_fact_leads(lookups):
+    """
+    Extrae y transforma fact_leads desde crm_fuente.leads.
+    Grano: un lead. El vendedor es el responsable del lead (assigned_user_id)
+    y la fecha es la de entrada del lead (date_entered).
+    """
+    print("→ Preparando fact_leads...")
+
+    query = """
+        SELECT
+            id                AS lead_nk,
+            assigned_user_id  AS vendedor_nk,
+            date_entered      AS fecha_entrada
+        FROM leads
+    """
+    df = pd.read_sql(query, ENGINE_ORIGEN)
+    filas_originales = len(df)
+
+    # --- LOOKUPS: NK -> SK ---
+    df["lead_sk"]     = df["lead_nk"].map(lookups["lead"])
+    df["vendedor_sk"] = df["vendedor_nk"].map(lookups["vendedor"])
+
+    # --- FECHA: formato SK YYYYMMDD ---
+    df["fecha_entrada_sk"] = df["fecha_entrada"].apply(fecha_a_sk)
+
+    # --- MÉTRICA ---
+    df["contador_lead"] = 1
+
+    # --- FILTRO POR INTEGRIDAD (se reporta, no se oculta) ---
+    df_valido = df.dropna(subset=[
+        "lead_sk", "vendedor_sk", "fecha_entrada_sk"
+    ]).copy()
+
+    filas_descartadas = filas_originales - len(df_valido)
+    if filas_descartadas > 0:
+        print(f"  ⚠ {filas_descartadas} filas descartadas por FKs nulas")
+
+    columnas_fact = ["lead_sk", "vendedor_sk", "fecha_entrada_sk", "contador_lead"]
+    df_valido[columnas_fact] = df_valido[columnas_fact].astype(int)
+    return df_valido[columnas_fact]
+
+
 def insertar_hecho(nombre_tabla, df):
     """Inserta un DataFrame ya preparado en la fact table indicada."""
     df.to_sql(nombre_tabla, ENGINE_DW, if_exists="append", index=False)
@@ -261,6 +305,7 @@ def ejecutar_carga_facts():
     # 1) EXTRAER + TRANSFORMAR todo antes de tocar las fact tables
     df_opp = preparar_fact_opportunities(lookups)
     df_act = preparar_fact_actividades(lookups, set(df_opp["oportunidad_dd"]))
+    df_lea = preparar_fact_leads(lookups)
 
     # Protección: si no hay oportunidades válidas, casi seguro faltan las
     # dimensiones. Se aborta SIN vaciar los hechos existentes.
@@ -275,6 +320,7 @@ def ejecutar_carga_facts():
     vaciar_hechos()
     insertar_hecho("fact_opportunities", df_opp)
     insertar_hecho("fact_actividades", df_act)
+    insertar_hecho("fact_leads", df_lea)
 
     fin = datetime.now()
     duracion = (fin - inicio).total_seconds()

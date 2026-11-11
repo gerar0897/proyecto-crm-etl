@@ -12,7 +12,7 @@ USE dw_crm_2026;
 -- V1. Conteo de filas por tabla (esperado con los datos sintéticos:
 --     dim_vendedor 8, dim_cuenta 50, dim_lead 120, dim_contacto 80,
 --     dim_sales_stage 10, dim_tipo_actividad 2, dim_tiempo 1826,
---     fact_opportunities 150, fact_actividades 350)
+--     fact_opportunities 150, fact_actividades 350, fact_leads 120)
 -- ---------------------------------------------------------------------
 SELECT 'dim_vendedor' AS tabla, COUNT(*) AS filas FROM dim_vendedor
 UNION ALL SELECT 'dim_cuenta',          COUNT(*) FROM dim_cuenta
@@ -22,7 +22,8 @@ UNION ALL SELECT 'dim_sales_stage',     COUNT(*) FROM dim_sales_stage
 UNION ALL SELECT 'dim_tipo_actividad',  COUNT(*) FROM dim_tipo_actividad
 UNION ALL SELECT 'dim_tiempo',          COUNT(*) FROM dim_tiempo
 UNION ALL SELECT 'fact_opportunities',  COUNT(*) FROM fact_opportunities
-UNION ALL SELECT 'fact_actividades',    COUNT(*) FROM fact_actividades;
+UNION ALL SELECT 'fact_actividades',    COUNT(*) FROM fact_actividades
+UNION ALL SELECT 'fact_leads',          COUNT(*) FROM fact_leads;
 
 -- ---------------------------------------------------------------------
 -- V2. Integridad: actividades cuya oportunidad no existe en
@@ -43,6 +44,21 @@ FROM fact_opportunities f
 JOIN dim_sales_stage s ON s.sales_stage_sk = f.sales_stage_sk
 WHERE (s.es_cerrada = 0 AND f.ciclo_venta_dias IS NOT NULL)
    OR (s.es_cerrada = 1 AND f.ciclo_venta_dias IS NULL);
+
+-- ---------------------------------------------------------------------
+-- V4. Integridad de fact_leads: cada lead de dim_lead debe tener exactamente
+--     una fila en fact_leads (esperado: 0 leads sin hecho, 0 duplicados y
+--     120 leads, 53 convertidos).
+-- ---------------------------------------------------------------------
+SELECT (SELECT COUNT(*)
+          FROM dim_lead l
+          LEFT JOIN fact_leads f ON f.lead_sk = l.lead_sk
+         WHERE f.lead_sk IS NULL)                              AS leads_sin_hecho,
+       (SELECT COUNT(*) - COUNT(DISTINCT lead_sk) FROM fact_leads) AS leads_duplicados,
+       (SELECT COUNT(*) FROM fact_leads)                       AS leads_en_hecho,
+       (SELECT SUM(l.convertido)
+          FROM fact_leads f
+          JOIN dim_lead l ON l.lead_sk = f.lead_sk)            AS convertidos;
 
 -- ---------------------------------------------------------------------
 -- K1. Win Rate por vendedor (base declarada: total y cerradas)
@@ -109,17 +125,49 @@ ORDER BY actividades_por_oportunidad DESC;
 
 -- ---------------------------------------------------------------------
 -- K5. Lead-to-Opportunity rate (proxy): leads convertidos / total de leads.
---     Se calcula solo desde dim_lead porque la fuente no relaciona leads con
---     oportunidades. Esperado global: 53 / 120 = 44.2 %
+--     Se calcula sobre fact_leads (1 fila = 1 lead) y dim_lead (atributos).
+--     La fuente no relaciona leads con oportunidades, así que es una tasa
+--     sobre el universo de leads, no un seguimiento lead -> oportunidad.
+--     Esperado global: 53 / 120 = 44.2 %
 --     (Con el campo estado = 'Converted' serían 71 / 120 = 59.2 %; ver README, RN-05.)
 -- ---------------------------------------------------------------------
-SELECT fuente,
-       COUNT(*)                                    AS leads,
-       SUM(convertido)                             AS convertidos,
-       ROUND(100 * SUM(convertido) / COUNT(*), 1)  AS tasa_conversion_pct
-FROM dim_lead
-GROUP BY fuente
+
+-- K5a. Por fuente del lead
+SELECT l.fuente,
+       COUNT(*)                                       AS leads,
+       SUM(l.convertido)                              AS convertidos,
+       ROUND(100 * SUM(l.convertido) / COUNT(*), 1)   AS tasa_conversion_pct
+FROM fact_leads f
+JOIN dim_lead l ON l.lead_sk = f.lead_sk
+GROUP BY l.fuente
 ORDER BY tasa_conversion_pct DESC;
+
+-- K5b. Por vendedor (responsable del lead)
+--      Esperado: José Manuél Carrera 14/9 64.3 · Dalia Domínguez 16/10 62.5 ·
+--      María Eugenia Aguirre 17/9 52.9 · Socorro Ávila 12/6 50.0 ·
+--      Guadalupe Alemán 17/7 41.2 · Jos Zambrano 13/5 38.5 ·
+--      Abelardo Escobar 19/5 26.3 · Angélica Cardenas 12/2 16.7
+SELECT v.nombre_completo                              AS vendedor,
+       COUNT(*)                                       AS leads,
+       SUM(l.convertido)                              AS convertidos,
+       ROUND(100 * SUM(l.convertido) / COUNT(*), 1)   AS tasa_conversion_pct
+FROM fact_leads f
+JOIN dim_vendedor v ON v.vendedor_sk = f.vendedor_sk
+JOIN dim_lead     l ON l.lead_sk     = f.lead_sk
+GROUP BY v.vendedor_sk, v.nombre_completo
+ORDER BY tasa_conversion_pct DESC;
+
+-- K5c. Por año de entrada del lead (dim_tiempo, rol "fecha de entrada")
+--      Esperado: 2025 -> 75 leads, 37 convertidos, 49.3 % ; 2026 -> 45, 16, 35.6 %
+SELECT t.anio,
+       COUNT(*)                                       AS leads,
+       SUM(l.convertido)                              AS convertidos,
+       ROUND(100 * SUM(l.convertido) / COUNT(*), 1)   AS tasa_conversion_pct
+FROM fact_leads f
+JOIN dim_tiempo t ON t.tiempo_sk = f.fecha_entrada_sk
+JOIN dim_lead   l ON l.lead_sk   = f.lead_sk
+GROUP BY t.anio
+ORDER BY t.anio;
 
 -- ---------------------------------------------------------------------
 -- K6. Oportunidades y monto ganado por fuente de prospecto

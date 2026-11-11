@@ -100,14 +100,9 @@ CREATE TABLE fact_opportunities (
     fecha_creacion_sk INT NOT NULL,
     fecha_cierre_sk INT,
     oportunidad_dd VARCHAR(36) NOT NULL,
-    -- Cambio H-05: canal de origen del prospecto (opportunities.lead_source).
-    -- Atributo descriptivo de baja cardinalidad (6 valores); necesario para
-    -- "oportunidades por fuente de prospecto".
     fuente VARCHAR(100),
     monto DECIMAL(15,2),
     probabilidad DECIMAL(5,2),
-    -- Cambio H-08: NULL para oportunidades abiertas (close_date es una fecha
-    -- estimada, no un cierre real). Solo se calcula en Closed Won / Closed Lost.
     ciclo_venta_dias INT,
     ganada BOOLEAN,
     UNIQUE KEY uq_opp_dd (oportunidad_dd),
@@ -122,12 +117,7 @@ CREATE TABLE fact_actividades (
     vendedor_sk INT NOT NULL,
     tipo_actividad_sk INT NOT NULL,
     fecha_actividad_sk INT NOT NULL,
-    -- Cambio H-06: se eliminan contacto_sk y lead_sk. La fuente no relaciona
-    -- calls/meetings con contactos ni leads, así que siempre quedaban en NULL.
     actividad_dd VARCHAR(36) NOT NULL,
-    -- Cambio H-03: dimensión degenerada que enlaza la actividad con su
-    -- oportunidad (calls/meetings.opportunity_id, 100% poblado en la fuente).
-    -- Misma llave que fact_opportunities.oportunidad_dd: permite drill-across.
     oportunidad_dd VARCHAR(36) NOT NULL,
     estado VARCHAR(50),
     duracion_horas DECIMAL(6,2),
@@ -137,6 +127,19 @@ CREATE TABLE fact_actividades (
     FOREIGN KEY (vendedor_sk) REFERENCES dim_vendedor(vendedor_sk),
     FOREIGN KEY (tipo_actividad_sk) REFERENCES dim_tipo_actividad(tipo_actividad_sk),
     FOREIGN KEY (fecha_actividad_sk) REFERENCES dim_tiempo(tiempo_sk)
+);
+
+
+-- Nuevo
+CREATE TABLE fact_leads (
+    lead_sk INT NOT NULL,
+    vendedor_sk INT NOT NULL,
+    fecha_entrada_sk INT NOT NULL,
+    contador_lead INT DEFAULT 1,
+    UNIQUE KEY uq_lead_sk (lead_sk),
+    FOREIGN KEY (lead_sk) REFERENCES dim_lead(lead_sk),
+    FOREIGN KEY (vendedor_sk) REFERENCES dim_vendedor(vendedor_sk),
+    FOREIGN KEY (fecha_entrada_sk) REFERENCES dim_tiempo(tiempo_sk)
 );
 
 -- =====================================================================
